@@ -1,3 +1,4 @@
+import os
 import time
 import logging
 
@@ -9,14 +10,15 @@ from google.genai import errors
 
 # =========================================================
 # DATABASE CONFIGURATION
-# Same database used by config/database.php
+# Render Environment Variables
 # =========================================================
 
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "",
-    "database": "smartcareer_hub"
+    "host": os.environ.get("DB_HOST"),
+    "user": os.environ.get("DB_USER"),
+    "password": os.environ.get("DB_PASSWORD"),
+    "database": os.environ.get("DB_NAME"),
+    "port": int(os.environ.get("DB_PORT", "3306"))
 }
 
 
@@ -69,6 +71,11 @@ def get_gemini_api_key():
 
     except mysql.connector.Error as e:
 
+        logging.error(
+            "Database error while reading Gemini API key: %s",
+            e
+        )
+
         raise RuntimeError(
             "Unable to read Gemini API Key "
             "from the database."
@@ -103,8 +110,7 @@ MODELS = [
 
 def ask_gemini(question):
 
-    # Get the latest API key from Admin settings.
-    # This means the key is not hardcoded in Python.
+    # Gemini API key is fetched from Admin > AI Settings
     api_key = get_gemini_api_key()
 
     client = genai.Client(
@@ -131,12 +137,10 @@ def ask_gemini(question):
                 )
 
                 if response.text:
-
                     return response.text
 
                 raise RuntimeError(
-                    f"{model} returned "
-                    "an empty response."
+                    f"{model} returned an empty response."
                 )
 
             except errors.ServerError as e:
@@ -152,7 +156,6 @@ def ask_gemini(question):
                     )
 
                     if attempt == 0:
-
                         time.sleep(3)
                         continue
 
@@ -164,24 +167,19 @@ def ask_gemini(question):
 
                 last_error = e
 
-                # If model is unavailable,
-                # try the next fallback model.
+                # Model unavailable -> try next model
                 if e.code == 404:
 
                     logging.warning(
-                        "%s is unavailable. "
-                        "Trying fallback.",
+                        "%s is unavailable. Trying fallback.",
                         model
                     )
 
                     break
 
-                # Invalid API key, quota,
-                # permission etc.
                 raise
 
     if last_error:
-
         raise last_error
 
     raise RuntimeError(
