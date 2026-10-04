@@ -1,1 +1,6 @@
-
+Flask
+gunicorn
+PyMuPDF
+python-docx
+google-genai
+mysql-connector-python
