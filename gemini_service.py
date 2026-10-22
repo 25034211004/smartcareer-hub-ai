@@ -27,7 +27,10 @@ def get_gemini_api_key():
 # =========================================================
 
 MODELS = [
-    "gemini-3.8-flash"
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash"
 ]
 
 # =========================================================
