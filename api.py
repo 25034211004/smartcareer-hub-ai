@@ -332,12 +332,15 @@ def analyze_resume_api():
 
         analysis = analyze_resume(resume_text, target_role)
 
+      
         return jsonify({
             "success": True,
             "filename": filename,
             "target_role": target_role,
+            "extracted_text": resume_text,
             "analysis": analysis
         }), 200
+
 
     except Exception:
         app.logger.exception("AI resume analysis failed")
