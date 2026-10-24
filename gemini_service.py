@@ -8,7 +8,28 @@ from google.genai import errors
 
 
 # =========================================================
-# GEMINI API KEY FROM RENDER ENVIRONMENT VARIABLES
+# CONFIGURATION
+# =========================================================
+
+# Keep request timeout limited so PHP does not wait indefinitely.
+GEMINI_TIMEOUT_MS = 25000
+
+# Limited retry attempts for temporary errors.
+MAX_RETRIES = 2
+
+# Use only model IDs supported by your Gemini API account.
+MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+]
+
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+# =========================================================
+# API KEY
 # =========================================================
 
 def get_gemini_api_key():
@@ -23,21 +44,7 @@ def get_gemini_api_key():
 
 
 # =========================================================
-# GEMINI MODEL FALLBACK
-# =========================================================
-# If a model is unavailable, the next model is attempted.
-# Model availability depends on your Gemini API access.
-# =========================================================
-
-MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash"
-]
-
-# =========================================================
-# ASK GEMINI WITH RETRIES
+# GEMINI SERVICE
 # =========================================================
 
 def ask_gemini(question):
@@ -46,20 +53,26 @@ def ask_gemini(question):
         raise ValueError("Gemini question cannot be empty.")
 
     api_key = get_gemini_api_key()
-    client = genai.Client(api_key=api_key)
+
+    client = genai.Client(
+        api_key=api_key,
+        http_options={
+            "timeout": GEMINI_TIMEOUT_MS
+        }
+    )
 
     last_error = None
 
     for model in MODELS:
 
-        # Up to 3 attempts for temporary server/rate-limit errors
-        for attempt in range(3):
+        for attempt in range(MAX_RETRIES + 1):
 
             try:
                 logging.info(
-                    "Trying Gemini model %s, attempt %s",
+                    "Trying Gemini model %s, attempt %s/%s",
                     model,
-                    attempt + 1
+                    attempt + 1,
+                    MAX_RETRIES + 1
                 )
 
                 response = client.models.generate_content(
@@ -77,29 +90,33 @@ def ask_gemini(question):
                     return answer.strip()
 
                 raise RuntimeError(
-                    f"{model} returned an empty response."
+                    "Gemini returned an empty response."
                 )
 
             except errors.ServerError as error:
                 last_error = error
                 status = getattr(error, "code", None)
 
-                # Temporary server errors: retry with backoff
-                if status in (429, 500, 502, 503, 504):
-                    logging.warning(
-                        "Gemini temporary error %s on %s, attempt %s",
-                        status,
-                        model,
-                        attempt + 1
+                if status not in RETRYABLE_STATUS_CODES:
+                    logging.exception(
+                        "Non-retryable Gemini server error on %s",
+                        model
                     )
+                    raise
 
-                    if attempt < 2:
-                        time.sleep(2 ** (attempt + 1))
-                        continue
+                logging.warning(
+                    "Gemini temporary server error %s on %s, attempt %s",
+                    status,
+                    model,
+                    attempt + 1
+                )
 
-                    break
+                if attempt < MAX_RETRIES:
+                    time.sleep(1 if attempt == 0 else 2)
+                    continue
 
-                raise
+                # Move to the next configured model.
+                break
 
             except errors.ClientError as error:
                 last_error = error
@@ -107,24 +124,45 @@ def ask_gemini(question):
 
                 if status == 404:
                     logging.warning(
-                        "Gemini model %s unavailable; trying fallback.",
+                        "Gemini model %s not found; trying fallback.",
                         model
                     )
                     break
 
-                # Invalid key, permissions, and other client errors
-                # should be visible in logs instead of being hidden.
-                raise
+                if status == 429:
+                    logging.warning(
+                        "Gemini rate limit reached on %s.",
+                        model
+                    )
 
-            except Exception:
-                # Do not hide unexpected errors.
+                    if attempt < MAX_RETRIES:
+                        time.sleep(1 if attempt == 0 else 2)
+                        continue
+
+                    break
+
+                # Invalid key, permission errors, etc. should not
+                # be retried across every model.
                 logging.exception(
-                    "Unexpected Gemini error using model %s",
+                    "Gemini client error on model %s",
                     model
                 )
+                raise
+
+            except Exception as error:
+                last_error = error
+
+                logging.exception(
+                    "Gemini request failed on model %s",
+                    model
+                )
+
+                # Do not retry unknown errors automatically.
                 raise
 
     if last_error is not None:
         raise last_error
 
-    raise RuntimeError("No Gemini model returned a response.")
+    raise RuntimeError(
+        "No configured Gemini model returned a response."
+    )
